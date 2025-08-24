@@ -22,10 +22,12 @@ import java.util.Set;
 @Table(
         name = "clients",
         uniqueConstraints = {
-                @UniqueConstraint(name = "uk_client_email", columnNames = "email")
+                @UniqueConstraint(name = "uk_clients_email", columnNames = {"email"})
         },
         indexes = {
-                @Index(name = "idx_client_name", columnList = "name")
+                @Index(name = "idx_clients_email", columnList = "email"),
+                @Index(name = "idx_clients_name", columnList = "name"),
+                @Index(name = "idx_clients_address", columnList = "address")
         }
 )
 public class Client {
@@ -41,9 +43,14 @@ public class Client {
     @Column(nullable = false, length = 320, unique = true)
     private String email;
 
+    @Column(length = 500)
+    private String address;
+
     @Builder.Default
     @Column(nullable = false)
     private boolean active = true;
+
+    private LocalDateTime deactivatedAt;
 
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
@@ -63,6 +70,7 @@ public class Client {
     @Builder.Default
     private Set<Order> ordersAsConsumer = new HashSet<>();
 
+    @JsonIgnore
     @Transient
     public BigDecimal getTotalProfit() {
         BigDecimal plus = ordersAsSupplier.stream()
@@ -76,5 +84,22 @@ public class Client {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return plus.subtract(minus);
+    }
+
+    @PrePersist
+    @PreUpdate
+    private void normalize() {
+        if (name != null) {
+            name = name.trim();
+        }
+        if (email != null) {
+            email = email.trim().toLowerCase();
+        }
+        if (address != null) {
+            address = address.trim();
+            if (address.isEmpty()) {
+                address = null;
+            }
+        }
     }
 }

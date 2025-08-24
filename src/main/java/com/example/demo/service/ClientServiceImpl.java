@@ -1,146 +1,201 @@
 package com.example.demo.service;
 
 import com.example.demo.dto.ClientDto;
+import com.example.demo.dto.ClientProfitDto;
+import com.example.demo.dto.CreateClientRequest;
+import com.example.demo.dto.OrderDto;
 import com.example.demo.dto.UpdateClientRequest;
+import com.example.demo.exception.BadRequestException;
+import com.example.demo.exception.ConflictException;
 import com.example.demo.exception.NotFoundException;
 import com.example.demo.model.Client;
+import com.example.demo.model.Order;
 import com.example.demo.repository.ClientRepository;
+import com.example.demo.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
+@Transactional
 public class ClientServiceImpl implements ClientService {
 
     private final ClientRepository clientRepository;
+    private final OrderRepository orderRepository;
 
-    @Override
-    @Transactional
-    public ClientDto create(String name, String email) {
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("Client name must not be blank");
-        }
-        if (email == null || email.isBlank()) {
-            throw new IllegalArgumentException("Client email must not be blank");
-        }
-        clientRepository.findByEmail(email).ifPresent(c -> {
-            throw new IllegalArgumentException("Client with email already exists: " + email);
-        });
-
-        Client client = Client.builder()
-                .name(name.trim())
-                .email(email.trim())
-                .active(true)
-                .build();
-
-        Client saved = clientRepository.save(client);
-        return toDtoWithProfit(saved);
-    }
-
-    @Override
-    public ClientDto getById(Long id) {
-        Client c = clientRepository.findById(id)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
-        return toDtoWithProfit(c);
-    }
-
-    @Override
-    public List<ClientDto> listAll() {
-        return clientRepository.findAll().stream()
-                .sorted(Comparator.comparing(Client::getName, String.CASE_INSENSITIVE_ORDER))
-                .map(this::toDtoWithProfit)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<ClientDto> search(String keyword) {
-        if (keyword == null || keyword.trim().length() < 3) {
-            return List.of();
-        }
-        String q = keyword.toLowerCase(Locale.ROOT).trim();
-        return clientRepository.findAll().stream()
-                .filter(c ->
-                        (c.getName() != null && c.getName().toLowerCase(Locale.ROOT).contains(q)) ||
-                                (c.getEmail() != null && c.getEmail().toLowerCase(Locale.ROOT).contains(q))
-                )
-                .sorted(Comparator.comparing(Client::getName, String.CASE_INSENSITIVE_ORDER))
-                .map(this::toDtoWithProfit)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    @Transactional
-    public ClientDto update(Long id, UpdateClientRequest request) {
-        Client c = clientRepository.findById(id)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
-
-        if (request.getName() == null || request.getName().isBlank()) {
-            throw new IllegalArgumentException("Client name must not be blank");
-        }
-        if (request.getEmail() == null || request.getEmail().isBlank()) {
-            throw new IllegalArgumentException("Client email must not be blank");
-        }
-
-        clientRepository.findByEmail(request.getEmail().trim()).ifPresent(other -> {
-            if (!other.getId().equals(c.getId())) {
-                throw new IllegalArgumentException("Client with email already exists: " + request.getEmail());
-            }
-        });
-
-        c.setName(request.getName().trim());
-        c.setEmail(request.getEmail().trim());
-        c.setActive(Boolean.TRUE.equals(request.getActive()));
-
-        Client saved = clientRepository.save(c);
-        return toDtoWithProfit(saved);
-    }
-
-    @Override
-    @Transactional
-    public ClientDto activate(Long id) {
-        Client c = clientRepository.findById(id)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
-        if (!c.isActive()) {
-            c.setActive(true);
-            clientRepository.save(c);
-        }
-        return toDtoWithProfit(c);
-    }
-
-    @Override
-    @Transactional
-    public ClientDto deactivate(Long id) {
-        Client c = clientRepository.findById(id)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
-        if (c.isActive()) {
-            c.setActive(false);
-            clientRepository.save(c);
-        }
-        return toDtoWithProfit(c);
-    }
-
-    @Override
-    public BigDecimal totalProfit(Long clientId) {
-        Client c = clientRepository.findById(clientId)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + clientId));
-        return c.getTotalProfit();
-    }
-
-    private ClientDto toDtoWithProfit(Client c) {
+    private ClientDto toClientDto(Client c) {
         return ClientDto.builder()
                 .id(c.getId())
                 .name(c.getName())
                 .email(c.getEmail())
+                .address(c.getAddress())
                 .active(c.isActive())
-                .totalProfit(c.getTotalProfit())
+                .deactivatedAt(c.getDeactivatedAt())
                 .build();
+    }
+
+    private OrderDto toOrderDto(Order o) {
+        return OrderDto.builder()
+                .id(o.getId())
+                .title(o.getTitle())
+                .supplierId(o.getSupplier().getId())
+                .consumerId(o.getConsumer().getId())
+                .price(o.getPrice())
+                .startedAt(o.getStartedAt())
+                .finishedAt(o.getFinishedAt())
+                .createdAt(o.getCreatedAt())
+                .build();
+    }
+
+    @Override
+    public ClientDto create(CreateClientRequest request) {
+        if (request.getName() == null || request.getName().isBlank()) {
+            throw new BadRequestException("Client name must not be blank");
+        }
+        if (request.getEmail() == null || request.getEmail().isBlank()) {
+            throw new BadRequestException("Client email must not be blank");
+        }
+
+        clientRepository.findByEmailIgnoreCase(request.getEmail().trim())
+                .ifPresent(x -> { throw new ConflictException("Email already exists: " + request.getEmail()); });
+
+        Client client = Client.builder()
+                .name(request.getName().trim())
+                .email(request.getEmail().trim())
+                .address(request.getAddress() == null ? null : request.getAddress().trim())
+                .active(true)
+                .deactivatedAt(null)
+                .build();
+
+        return toClientDto(clientRepository.save(client));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ClientDto getById(Long id) {
+        Client c = clientRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
+        return toClientDto(c);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ClientDto> listAllOrSearch(String query) {
+        if (query == null || query.trim().isBlank()) {
+            return clientRepository.findAll().stream()
+                    .sorted(Comparator.comparing(Client::getId))
+                    .map(this::toClientDto)
+                    .toList();
+        }
+        String q = query.trim();
+        if (q.length() < 3) {
+            throw new BadRequestException("Search keyword must be at least 3 characters");
+        }
+        return clientRepository.searchByKeyword(q).stream()
+                .sorted(Comparator.comparing(Client::getId))
+                .map(this::toClientDto)
+                .toList();
+    }
+
+    @Override
+    public ClientDto update(Long id, UpdateClientRequest request) {
+        if (request.getName() == null || request.getName().isBlank()) {
+            throw new BadRequestException("Client name must not be blank");
+        }
+        if (request.getEmail() == null || request.getEmail().isBlank()) {
+            throw new BadRequestException("Client email must not be blank");
+        }
+
+        Client client = clientRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
+
+        clientRepository.findByEmailIgnoreCase(request.getEmail().trim())
+                .filter(other -> !other.getId().equals(id))
+                .ifPresent(other -> { throw new ConflictException("Email already exists: " + request.getEmail()); });
+
+        client.setName(request.getName().trim());
+        client.setEmail(request.getEmail().trim());
+        client.setAddress(request.getAddress() == null ? null : request.getAddress().trim());
+
+        return toClientDto(clientRepository.save(client));
+    }
+
+    @Override
+    public ClientDto updateActiveStatus(Long id, boolean active) {
+        Client client = clientRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Client not found: id=" + id));
+
+        if (active) {
+            client.setActive(true);
+            client.setDeactivatedAt(null);
+        } else {
+            if (client.isActive()) {
+                client.setActive(false);
+                client.setDeactivatedAt(LocalDateTime.now());
+            }
+        }
+        return toClientDto(clientRepository.save(client));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<OrderDto> listOrdersForClient(Long clientId) {
+        clientRepository.findById(clientId)
+                .orElseThrow(() -> new NotFoundException("Client not found: id=" + clientId));
+
+        return orderRepository.findBySupplierIdOrConsumerId(clientId, clientId).stream()
+                .sorted(Comparator.comparing(Order::getId))
+                .map(this::toOrderDto)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ClientProfitDto getProfit(Long clientId) {
+        Client client = clientRepository.findById(clientId)
+                .orElseThrow(() -> new NotFoundException("Client not found: id=" + clientId));
+
+        BigDecimal profit = orderRepository.computeProfit(client.getId());
+        return ClientProfitDto.builder()
+                .clientId(client.getId())
+                .name(client.getName())
+                .email(client.getEmail())
+                .active(client.isActive())
+                .profit(profit)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ClientProfitDto> findClientsByProfitRange(BigDecimal min, BigDecimal max) {
+        if (min != null && max != null && min.compareTo(max) > 0) {
+            throw new BadRequestException("min must be <= max");
+        }
+
+        return clientRepository.findAll().stream()
+                .map(c -> {
+                    BigDecimal p = orderRepository.computeProfit(c.getId());
+                    return ClientProfitDto.builder()
+                            .clientId(c.getId())
+                            .name(c.getName())
+                            .email(c.getEmail())
+                            .active(c.isActive())
+                            .profit(p)
+                            .build();
+                })
+                .filter(dto -> {
+                    boolean ok = true;
+                    if (min != null) ok = ok && dto.getProfit().compareTo(min) >= 0;
+                    if (max != null) ok = ok && dto.getProfit().compareTo(max) <= 0;
+                    return ok;
+                })
+                .sorted(Comparator.comparing(ClientProfitDto::getClientId))
+                .toList();
     }
 }

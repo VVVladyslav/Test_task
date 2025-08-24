@@ -2,83 +2,118 @@ package com.example.demo.service;
 
 import com.example.demo.dto.CreateOrderRequest;
 import com.example.demo.dto.OrderDto;
+import com.example.demo.dto.UpdateOrderRequest;
+import com.example.demo.exception.BadRequestException;
+import com.example.demo.exception.ConflictException;
 import com.example.demo.exception.NotFoundException;
 import com.example.demo.model.Client;
 import com.example.demo.model.Order;
 import com.example.demo.repository.ClientRepository;
 import com.example.demo.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
+@Transactional
 public class OrderServiceImpl implements OrderService {
-
-    private static final BigDecimal MIN_ALLOWED_PROFIT = new BigDecimal("-1000");
 
     private final OrderRepository orderRepository;
     private final ClientRepository clientRepository;
 
-    @Override
-    @Transactional
-    public OrderDto create(CreateOrderRequest request) {
-        validateCreateRequest(request);
-
-        Client supplier = clientRepository.findById(request.getSupplierId())
-                .orElseThrow(() -> new NotFoundException("Supplier not found: id=" + request.getSupplierId()));
-        Client consumer = clientRepository.findById(request.getConsumerId())
-                .orElseThrow(() -> new NotFoundException("Consumer not found: id=" + request.getConsumerId()));
-
-        if (!supplier.isActive()) {
-            throw new IllegalStateException("Supplier is inactive: id=" + supplier.getId());
-        }
-        if (!consumer.isActive()) {
-            throw new IllegalStateException("Consumer is inactive: id=" + consumer.getId());
-        }
-        if (supplier.getId().equals(consumer.getId())) {
-            throw new IllegalArgumentException("Supplier and consumer must be different clients");
-        }
-
-        BigDecimal price = request.getPrice();
-        BigDecimal newSupplierProfit = supplier.getTotalProfit().add(price);
-        BigDecimal newConsumerProfit = consumer.getTotalProfit().subtract(price);
-
-        if (newSupplierProfit.compareTo(MIN_ALLOWED_PROFIT) < 0) {
-            throw new IllegalStateException("Supplier profit would drop below " + MIN_ALLOWED_PROFIT);
-        }
-        if (newConsumerProfit.compareTo(MIN_ALLOWED_PROFIT) < 0) {
-            throw new IllegalStateException("Consumer profit would drop below " + MIN_ALLOWED_PROFIT);
-        }
-
-        LocalDateTime startedAt = request.getStartedAt() != null ? request.getStartedAt() : LocalDateTime.now();
-        LocalDateTime finishedAt = request.getFinishedAt();
-
-        if (finishedAt != null && finishedAt.isBefore(startedAt)) {
-            throw new IllegalArgumentException("finishedAt must be after or equal to startedAt");
-        }
-
-        Order order = Order.builder()
-                .title(request.getTitle().trim())
-                .supplier(supplier)
-                .consumer(consumer)
-                .price(price)
-                .startedAt(startedAt)
-                .finishedAt(finishedAt)
+    private OrderDto toDto(Order o) {
+        return OrderDto.builder()
+                .id(o.getId())
+                .title(o.getTitle())
+                .supplierId(o.getSupplier().getId())
+                .consumerId(o.getConsumer().getId())
+                .price(o.getPrice())
+                .startedAt(o.getStartedAt())
+                .finishedAt(o.getFinishedAt())
+                .createdAt(o.getCreatedAt())
                 .build();
+    }
 
-        Order saved = orderRepository.save(order);
-        return toDto(saved);
+    private Client getClientOr404(Long id, String role) {
+        return clientRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException(role + " not found: id=" + id));
     }
 
     @Override
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public OrderDto create(CreateOrderRequest request) {
+        if (request.getSupplierId().equals(request.getConsumerId())) {
+            throw new BadRequestException("Supplier and consumer must be different");
+        }
+        if (request.getPrice() == null || request.getPrice().compareTo(BigDecimal.ONE) < 0) {
+            throw new BadRequestException("Price must be positive and >= 1");
+        }
+
+        Client supplier0 = getClientOr404(request.getSupplierId(), "Supplier");
+        Client consumer0 = getClientOr404(request.getConsumerId(), "Consumer");
+        if (!supplier0.isActive()) throw new BadRequestException("Supplier is inactive: id=" + supplier0.getId());
+        if (!consumer0.isActive()) throw new BadRequestException("Consumer is inactive: id=" + consumer0.getId());
+
+        LocalDateTime started = LocalDateTime.now();
+        long delayMillis = ThreadLocalRandom.current().nextLong(1_000, 10_001);
+        try {
+            Thread.sleep(delayMillis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        LocalDateTime finished = LocalDateTime.now();
+
+        Client supplier = clientRepository.findByIdForUpdate(request.getSupplierId())
+                .orElseThrow(() -> new NotFoundException("Supplier not found: id=" + request.getSupplierId()));
+        Client consumer = clientRepository.findByIdForUpdate(request.getConsumerId())
+                .orElseThrow(() -> new NotFoundException("Consumer not found: id=" + request.getConsumerId()));
+
+        if (!supplier.isActive() || (supplier.getDeactivatedAt() != null && !finished.isBefore(supplier.getDeactivatedAt()))) {
+            throw new BadRequestException("Supplier became inactive during processing");
+        }
+        if (!consumer.isActive() || (consumer.getDeactivatedAt() != null && !finished.isBefore(consumer.getDeactivatedAt()))) {
+            throw new BadRequestException("Consumer became inactive during processing");
+        }
+
+        BigDecimal currentProfitConsumer = orderRepository.computeProfit(consumer.getId());
+        BigDecimal profitAfter = currentProfitConsumer.subtract(request.getPrice());
+        if (profitAfter.compareTo(BigDecimal.valueOf(-1000)) < 0) {
+            throw new BadRequestException("Consumer profit would drop below -1000");
+        }
+
+        String normalizedTitle = request.getTitle().trim();
+        orderRepository.findByTitleIgnoreCaseAndSupplierIdAndConsumerId(
+                normalizedTitle, supplier.getId(), consumer.getId()
+        ).ifPresent(o -> { throw new ConflictException("Order with the same title/supplier/consumer already exists"); });
+
+        Order order = Order.builder()
+                .title(normalizedTitle)
+                .supplier(supplier)
+                .consumer(consumer)
+                .price(request.getPrice())
+                .startedAt(started)
+                .finishedAt(finished)
+                .build();
+
+        try {
+            return toDto(orderRepository.save(order));
+        } catch (DataIntegrityViolationException e) {
+            // Гонка по уникальному бизнес-ключу (дубликат)
+            throw new ConflictException("Order with the same title/supplier/consumer already exists");
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public OrderDto getById(Long id) {
         Order o = orderRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Order not found: id=" + id));
@@ -86,53 +121,49 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<OrderDto> listAll() {
         return orderRepository.findAll().stream()
-                .sorted(Comparator.comparing(Order::getCreatedAt))
+                .sorted(Comparator.comparing(Order::getId))
                 .map(this::toDto)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<OrderDto> listByClient(Long clientId) {
-        Client c = clientRepository.findById(clientId)
-                .orElseThrow(() -> new NotFoundException("Client not found: id=" + clientId));
-
-        return orderRepository.findAll().stream()
-                .filter(o -> (o.getSupplier() != null && o.getSupplier().getId().equals(c.getId()))
-                        || (o.getConsumer() != null && o.getConsumer().getId().equals(c.getId())))
-                .sorted(Comparator.comparing(Order::getCreatedAt))
+        return orderRepository.findBySupplierIdOrConsumerId(clientId, clientId).stream()
+                .sorted(Comparator.comparing(Order::getId))
                 .map(this::toDto)
-                .collect(Collectors.toList());
+                .toList();
     }
 
-    private void validateCreateRequest(CreateOrderRequest r) {
-        if (r == null) throw new IllegalArgumentException("CreateOrderRequest must not be null");
-        if (r.getTitle() == null || r.getTitle().trim().length() < 3) {
-            throw new IllegalArgumentException("Order title must be at least 3 characters");
+    @Override
+    public OrderDto update(Long id, UpdateOrderRequest request) {
+        Order order = orderRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Order not found: id=" + id));
+
+        if (request.getPrice() == null || request.getPrice().compareTo(BigDecimal.ONE) < 0) {
+            throw new BadRequestException("Price must be positive and >= 1");
         }
-        if (r.getSupplierId() == null) {
-            throw new IllegalArgumentException("supplierId must not be null");
+
+        String newTitle = request.getTitle().trim();
+        if (!order.getTitle().equalsIgnoreCase(newTitle)) {
+            orderRepository.findByTitleIgnoreCaseAndSupplierIdAndConsumerId(
+                    newTitle, order.getSupplier().getId(), order.getConsumer().getId()
+            ).ifPresent(o -> { throw new ConflictException("Order with the same title/supplier/consumer already exists"); });
+            order.setTitle(newTitle);
         }
-        if (r.getConsumerId() == null) {
-            throw new IllegalArgumentException("consumerId must not be null");
-        }
-        if (r.getPrice() == null || r.getPrice().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("price must be > 0");
-        }
+
+        order.setPrice(request.getPrice());
+        return toDto(orderRepository.save(order));
     }
 
-    private OrderDto toDto(Order o) {
-        return OrderDto.builder()
-                .id(o.getId())
-                .title(o.getTitle())
-                .supplierId(o.getSupplier() != null ? o.getSupplier().getId() : null)
-                .consumerId(o.getConsumer() != null ? o.getConsumer().getId() : null)
-                .supplierName(o.getSupplier() != null ? o.getSupplier().getName() : null)
-                .consumerName(o.getConsumer() != null ? o.getConsumer().getName() : null)
-                .price(o.getPrice())
-                .startedAt(o.getStartedAt())
-                .finishedAt(o.getFinishedAt())
-                .build();
+    @Override
+    public void delete(Long id) {
+        if (!orderRepository.existsById(id)) {
+            throw new NotFoundException("Order not found: id=" + id);
+        }
+        orderRepository.deleteById(id);
     }
 }

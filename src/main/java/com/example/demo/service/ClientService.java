@@ -1,6 +1,9 @@
 package com.example.demo.service;
 
 import com.example.demo.dto.ClientDto;
+import com.example.demo.dto.ClientProfitDto;
+import com.example.demo.dto.CreateClientRequest;
+import com.example.demo.dto.OrderDto;
 import com.example.demo.dto.UpdateClientRequest;
 
 import java.math.BigDecimal;
@@ -8,19 +11,14 @@ import java.util.List;
 
 public interface ClientService {
 
-    ClientDto create(String name, String email);
-
+    ClientDto create(CreateClientRequest request);
     ClientDto getById(Long id);
-
-    List<ClientDto> listAll();
-
-    List<ClientDto> search(String keyword);
-
+    List<ClientDto> listAllOrSearch(String query);
     ClientDto update(Long id, UpdateClientRequest request);
 
-    ClientDto activate(Long id);
+    ClientDto updateActiveStatus(Long id, boolean active);
 
-    ClientDto deactivate(Long id);
-
-    BigDecimal totalProfit(Long clientId);
+    List<OrderDto> listOrdersForClient(Long clientId);
+    ClientProfitDto getProfit(Long clientId);
+    List<ClientProfitDto> findClientsByProfitRange(BigDecimal min, BigDecimal max);
 }

@@ -4,11 +4,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 import java.math.BigDecimal;
 
@@ -17,19 +13,13 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class CreateOrderRequest {
+public class UpdateOrderRequest {
 
-    @NotBlank
-    @Size(min = 3, max = 300)
+    @NotBlank(message = "title must not be blank")
+    @Size(max = 300, message = "title length must be <= 300")
     private String title;
 
-    @NotNull
-    private Long supplierId;
-
-    @NotNull
-    private Long consumerId;
-
-    @NotNull
-    @DecimalMin(value = "0.00", inclusive = false)
+    @NotNull(message = "price is required")
+    @DecimalMin(value = "1", inclusive = true, message = "price must be >= 1")
     private BigDecimal price;
 }

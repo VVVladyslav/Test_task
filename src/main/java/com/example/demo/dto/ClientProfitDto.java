@@ -7,19 +7,16 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ClientDto {
-    private Long id;
+public class ClientProfitDto {
+    private Long clientId;
     private String name;
     private String email;
-    private String address;
     private boolean active;
-    private LocalDateTime deactivatedAt;
-    private BigDecimal totalProfit;
+    private BigDecimal profit;
 }

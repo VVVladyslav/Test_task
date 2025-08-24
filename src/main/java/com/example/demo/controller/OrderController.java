@@ -2,9 +2,11 @@ package com.example.demo.controller;
 
 import com.example.demo.dto.CreateOrderRequest;
 import com.example.demo.dto.OrderDto;
+import com.example.demo.dto.UpdateOrderRequest;
 import com.example.demo.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,6 +21,7 @@ public class OrderController {
     private final OrderService orderService;
 
     @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
     public OrderDto create(@Valid @RequestBody CreateOrderRequest request) {
         return orderService.create(request);
     }
@@ -29,12 +32,18 @@ public class OrderController {
     }
 
     @GetMapping
-    public List<OrderDto> listAll() {
-        return orderService.listAll();
+    public List<OrderDto> list(@RequestParam(value = "clientId", required = false) Long clientId) {
+        return (clientId == null) ? orderService.listAll() : orderService.listByClient(clientId);
     }
 
-    @GetMapping("/by-client/{clientId}")
-    public List<OrderDto> listByClient(@PathVariable Long clientId) {
-        return orderService.listByClient(clientId);
+    @PutMapping("/{id}")
+    public OrderDto update(@PathVariable Long id, @Valid @RequestBody UpdateOrderRequest request) {
+        return orderService.update(id, request);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Long id) {
+        orderService.delete(id);
     }
 }

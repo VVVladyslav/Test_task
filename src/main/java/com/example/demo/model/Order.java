@@ -2,6 +2,7 @@ package com.example.demo.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Check;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -31,6 +32,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_order_title", columnList = "title")
         }
 )
+@Check(constraints = "price > 0")
+@Check(constraints = "supplier_id <> consumer_id")
 public class Order {
 
     @Id
@@ -60,7 +63,10 @@ public class Order {
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal price;
 
+    @Column(nullable = false)
     private LocalDateTime startedAt;
+
+    @Column(nullable = false)
     private LocalDateTime finishedAt;
 
     @CreationTimestamp
